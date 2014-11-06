@@ -31,6 +31,7 @@ import org.irmacard.android.util.credentials.CredentialPackage;
 import org.irmacard.android.util.pindialog.EnterPINDialogFragment;
 import org.irmacard.androidmanagement.dialogs.AlertDialogFragment;
 import org.irmacard.credentials.Attributes;
+import org.irmacard.credentials.CredentialsResult;
 import org.irmacard.credentials.idemix.IdemixCredentials;
 import org.irmacard.credentials.idemix.util.CredentialInformation;
 import org.irmacard.credentials.info.CredentialDescription;
@@ -41,6 +42,7 @@ import org.irmacard.credentials.util.log.LogEntry;
 import org.irmacard.idemix.IdemixService;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.DialogFragment;
 import android.app.PendingIntent;
 import android.content.Context;
@@ -73,6 +75,7 @@ public class WaitingForCardActivity extends Activity implements EnterPINDialogFr
 	private static final int STATE_DISPLAYING = 3;
 	private static final int STATE_ERROR = 4;
 	private int activityState = STATE_IDLE;
+	private Intent launchOnDismiss;
 	
     public static final byte[] DEFAULT_PIN = {0x30, 0x30, 0x30, 0x30};
     public static final byte[] DEFAULT_MASTER_PIN = {0x30, 0x30, 0x30, 0x30, 0x30, 0x30};
@@ -107,8 +110,21 @@ public class WaitingForCardActivity extends Activity implements EnterPINDialogFr
 			this.tries = tries;
 		}
 
+		public CardData(ArrayList<CredentialPackage> credentials,
+				ArrayList<LogEntry> logs, CardVersion cardVersion,
+				Exception error) {
+			this.credentials = credentials;
+			this.logs = logs;
+			this.cardVersion = cardVersion;
+			this.e = error;
+		}
+
 		public boolean isSuccesful() {
-			return e == null && tries == -1;
+			return this.credentials != null && tries == -1;
+		}
+		
+		public boolean hasError() {
+			return e != null;
 		}
 	}
 
@@ -260,6 +276,7 @@ public class WaitingForCardActivity extends Activity implements EnterPINDialogFr
 
 			IdemixService is = new IdemixService(new IsoDepCardService(tag));
 			IdemixCredentials ic = new IdemixCredentials(is);
+			CredentialsResult result = null;
 			
 			try {
 				ic.connect();
@@ -272,13 +289,19 @@ public class WaitingForCardActivity extends Activity implements EnterPINDialogFr
 				}
 
 				Log.i(TAG,"Retrieving credentials now"); 
-				List<CredentialDescription> credentials = ic.getCredentials();
+				result = ic.getCredentials();
+				List<CredentialDescription> credentials = result.getCredentialDescriptions();
 				for(CredentialDescription cd : credentials) {
 					Log.i(TAG, "Found credential: " + cd);
 					Attributes attr = ic.getAttributes(cd);
 					Log.i(TAG, "With attributes: " + attr);
 					credentialpks.add(new CredentialPackage(cd, attr));
 				}
+				
+				for(InfoException e : result.getErrors()) {
+					Log.e(TAG, e.getMessage(), e);
+				}
+				
 				credentialsRead = true;
 
 				Log.i(TAG,"Retrieving logs now");
@@ -310,26 +333,21 @@ public class WaitingForCardActivity extends Activity implements EnterPINDialogFr
 					e.printStackTrace();
 				}
 			}
-
-			return new CardData(credentialpks, logs, cardVersion);
+			Exception error = null;
+			if (result != null && !result.getErrors().isEmpty()) {
+				error = result.getErrors().get(0);
+			}
+			
+			return new CardData(credentialpks, logs, cardVersion, error);
 		}
 		
 		@Override
 		protected void onPostExecute(CardData data) {
 			activityState = STATE_DISPLAYING;
-			
-			if(data.isSuccesful()) {
-				// Move to CredentialListActivity
-				Log.i(TAG, "Post Excecute, got all data succesfully");
-				Intent intent = new Intent(context, CredentialListActivity.class);
-				intent.putExtra(EXTRA_CREDENTIAL_PACKAGES, data.credentials);
-				intent.putExtra(EXTRA_LOG_ENTRIES, data.logs);
-				intent.putExtra(EXTRA_TAG, tag);
-				intent.putExtra(EXTRA_CARD_PIN, pin);
-				intent.putExtra(EXTRA_CARD_VERSION, data.cardVersion);
-				tries = -1;
-				startActivity(intent);
-			} else {
+			Boolean waitForDismiss = false;
+			WaitingForCardActivity.this.launchOnDismiss = null;	
+
+			if (data.hasError()) {
 				if(tries != -1) {
 					Log.i(TAG, "Pin incorect, " + tries + " left.");
 					if(tries > 0) {
@@ -346,6 +364,24 @@ public class WaitingForCardActivity extends Activity implements EnterPINDialogFr
 					AlertDialogFragment f = AlertDialogFragment.getInstance("Card Error", data.e.getMessage());
 					f.show(getFragmentManager(), "alert");
 					setState(STATE_ERROR);
+					waitForDismiss = true;
+				}
+			}
+			
+			if(data.isSuccesful()) {
+				// Move to CredentialListActivity
+				Log.i(TAG, "Post Excecute, got all data succesfully");
+				Intent intent = new Intent(context, CredentialListActivity.class);
+				intent.putExtra(EXTRA_CREDENTIAL_PACKAGES, data.credentials);
+				intent.putExtra(EXTRA_LOG_ENTRIES, data.logs);
+				intent.putExtra(EXTRA_TAG, tag);
+				intent.putExtra(EXTRA_CARD_PIN, pin);
+				intent.putExtra(EXTRA_CARD_VERSION, data.cardVersion);
+				tries = -1;				
+				if (!waitForDismiss) {
+					startActivity(intent);
+				} else {
+					WaitingForCardActivity.this.launchOnDismiss = intent;	
 				}
 			}
 		}
@@ -366,6 +402,8 @@ public class WaitingForCardActivity extends Activity implements EnterPINDialogFr
 
 	@Override
 	public void onAlertDismiss() {
+		if (this.launchOnDismiss != null) 
+			startActivity(launchOnDismiss);
 		setState(STATE_IDLE);
 	}
 

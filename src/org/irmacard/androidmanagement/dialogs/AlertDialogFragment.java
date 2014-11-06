@@ -20,6 +20,7 @@
 package org.irmacard.androidmanagement.dialogs;
 
 import org.irmacard.androidmanagement.R;
+
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Dialog;
@@ -94,4 +95,5 @@ public class AlertDialogFragment extends DialogFragment {
                     + " must implement AlertDialogListener");
         }
     }
+
 }
