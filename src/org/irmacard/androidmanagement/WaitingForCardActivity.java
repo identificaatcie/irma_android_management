@@ -124,7 +124,7 @@ public class WaitingForCardActivity extends Activity implements EnterPINDialogFr
 		}
 		
 		public boolean hasError() {
-			return e != null;
+			return e != null || tries != -1;
 		}
 	}
 
